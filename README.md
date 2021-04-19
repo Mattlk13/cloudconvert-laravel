@@ -4,10 +4,9 @@ cloudconvert-laravel
 > This is the official Laravel package for the [CloudConvert](https://cloudconvert.com/api/v2) _API v2_. It is not compatible with API v1!
 > This package depends on the [PHP SDK v3](https://github.com/cloudconvert/cloudconvert-php/tree/master).
 
-[![Build Status](https://travis-ci.org/cloudconvert/cloudconvert-laravel.svg)](https://travis-ci.org/cloudconvert/cloudconvert-laravel)
+[![Tests](https://github.com/cloudconvert/cloudconvert-laravel/actions/workflows/run-tests.yml/badge.svg)](https://github.com/cloudconvert/cloudconvert-laravel/actions/workflows/run-tests.yml)
 [![Latest Stable Version](https://poser.pugx.org/cloudconvert/cloudconvert-laravel/v/stable)](https://packagist.org/packages/cloudconvert/cloudconvert-laravel)
 [![Total Downloads](https://poser.pugx.org/cloudconvert/cloudconvert-laravel/downloads)](https://packagist.org/packages/cloudconvert/cloudconvert-laravel)
-[![License](https://poser.pugx.org/cloudconvert/cloudconvert-laravel/license)](https://packagist.org/packages/cloudconvert/cloudconvert-laravel)
 
 
 ## Installation
@@ -17,6 +16,11 @@ You can install the package via composer:
 
     composer require cloudconvert/cloudconvert-laravel
 
+This package requires a HTTP client. It works both with Guzzle 6 and 7. If you are using Guzzle 6, you need an adapter:
+
+    composer require php-http/guzzle6-adapter
+
+Guzzle 7 works out of the box.
 
 Next you must publish the config file. 
 
@@ -74,10 +78,58 @@ CloudConvert::jobs()->create(
         (new Task('export/url', 'export-my-file'))
             ->set('input', 'convert-my-file')
     )
-)
+);
 ```
 
 Please check the [PHP SDK repository](https://github.com/cloudconvert/cloudconvert-php/tree/master) for the full documentation.
+
+
+## Uploading Files
+
+Uploads to CloudConvert are done via `import/upload` tasks (see the [docs](https://cloudconvert.com/api/v2/import#import-upload-tasks)). This SDK offers a convenient upload method:
+
+```php
+use \CloudConvert\Models\Job;
+
+$job = (new Job())
+    ->addTask(new Task('import/upload','upload-my-file'))
+    ->addTask(
+        (new Task('convert', 'convert-my-file'))
+            ->set('input', 'upload-my-file')
+            ->set('output_format', 'pdf')
+    )
+    ->addTask(
+        (new Task('export/url', 'export-my-file'))
+            ->set('input', 'convert-my-file')
+    );
+
+$cloudconvert->jobs()->create($job);
+
+$uploadTask = $job->getTasks()->whereName('upload-my-file')[0];
+
+$inputStream = fopen(Storage::path('my/input.docx'), 'r');
+
+CloudConvert::tasks()->upload($uploadTask, $inputStream);
+```
+
+## Downloading Files
+
+CloudConvert can generate public URLs for using `export/url` tasks. You can use the PHP SDK to download the output files when the Job is finished.
+
+```php
+$cloudconvert->jobs()->wait($job); // Wait for job completion
+
+foreach ($job->getExportUrls() as $file) {
+
+    $source = $cloudconvert->getHttpTransport()->download($file->url)->detach();
+    $dest = fopen(Storage::path('out/' . $file->filename), 'w');
+    
+    stream_copy_to_stream($source, $dest);
+
+}
+```
+
+
 
 
 ## Webhooks
@@ -130,8 +182,8 @@ class CloudConvertEventListener
         $job->getTag(); // can be used to store an ID
         
         $exportTask = $job->getTasks()
-            ->status(Task::STATUS_FINISHED) // get the task with 'finished' status ...
-            ->name('my-export-task')[0];    // ... and with the name 'my-export-task'
+            ->whereStatus(Task::STATUS_FINISHED) // get the task with 'finished' status ...
+            ->whereName('my-export-task')[0];    // ... and with the name 'my-export-task'
         
         // $exportTask->getResult() ...
         
@@ -143,7 +195,7 @@ class CloudConvertEventListener
         
         $job->getTag(); // can be used to store an ID
         
-        $failingTask =  $job->getTasks()->status(Task::STATUS_ERROR)[0];
+        $failingTask =  $job->getTasks()->whereStatus(Task::STATUS_ERROR)[0];
         
         Log::error('CloudConvert task failed: ' . $failingTask->getId());
         
